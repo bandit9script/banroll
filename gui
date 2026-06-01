@@ -1,3 +1,4 @@
+-- init
 if not game:IsLoaded() then 
     game.Loaded:Wait()
 end
@@ -28,7 +29,7 @@ local SilentAimSettings = {
 
 -- variables
 getgenv().SilentAimSettings = Settings
-local MainFileName = "UniversalSilentAim"
+local MainFileName = "BANDIT9HUB"
 local SelectedFile, FileToSave = "", ""
 
 local Camera = workspace.CurrentCamera
@@ -240,7 +241,7 @@ Library.MainColor = Color3.fromRGB(20, 15, 28)
 Library.BackgroundColor = Color3.fromRGB(15, 10, 22)
 Library.OutlineColor = Color3.fromRGB(45, 30, 60)
 
-local Window = Library:CreateWindow({Title = 'BANDITHUB', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2})
+local Window = Library:CreateWindow({Title = 'Universal Silent Aim', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2})
 
 local GeneralTab = Window:AddTab("General")
 local SettingsTab = Window:AddTab("Settings")
@@ -437,6 +438,9 @@ oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, Index)
     end
     return oldIndex(self, Index)
 end))
+-- ============================================================================
+-- [[ FINAL ESP: COMPLETE GRADIENT SYSTEM ]]
+-- ============================================================================
 
 local ESPTab = Window:AddTab("Visuals")
 
