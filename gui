@@ -60,37 +60,37 @@ fov_circle.ZIndex = 999
 fov_circle.Transparency = 1
 fov_circle.Color = Color3.fromRGB(140, 20, 255)
 
--- Кэш объектов карты для Wallbang
+-- Wallbang: динамическое обновление списка объектов карты
 local MAP_IgnoreList = nil
+local lastMapUpdate = 0
 
-local function CollectMapObjects()
-    local mapFolder = workspace:FindFirstChild("MAP")
-    if not mapFolder then
-        mapFolder = workspace
-    end
+local function UpdateMapIgnoreList()
+    local mapFolder = workspace:FindFirstChild("MAP") or workspace
     local objects = {}
-    local function recurse(parent)
-        for _, child in ipairs(parent:GetChildren()) do
-            if child:IsA("BasePart") and child.CanCollide then
-                table.insert(objects, child)
-            end
-            recurse(child)
+    -- Быстрый сбор всех частей карты через GetDescendants
+    for _, obj in ipairs(mapFolder:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.CanCollide then
+            table.insert(objects, obj)
         end
     end
-    recurse(mapFolder)
-    return objects
+    MAP_IgnoreList = objects
+    lastMapUpdate = tick()
 end
 
 local function getWallbangIgnoreList(originalIgnoreList)
-    if not MAP_IgnoreList then
-        MAP_IgnoreList = CollectMapObjects()
+    -- Обновляем список, если прошло больше 5 секунд или он ещё не собирался
+    if not MAP_IgnoreList or tick() - lastMapUpdate > 5 then
+        UpdateMapIgnoreList()
     end
+
     local newList = {}
-    if originalIgnoreList and type(originalIgnoreList) == "table" then
+    -- Копируем оригинальный список (если он таблица)
+    if type(originalIgnoreList) == "table" then
         for _, obj in ipairs(originalIgnoreList) do
             table.insert(newList, obj)
         end
     end
+    -- Добавляем все объекты карты
     for _, obj in ipairs(MAP_IgnoreList) do
         table.insert(newList, obj)
     end
@@ -103,7 +103,7 @@ function CalculateChance(Percentage)
     return chance <= Percentage / 100
 end
 
--- file handling
+-- file handling (по желанию)
 if not isfolder(MainFileName) then makefolder(MainFileName) end
 if not isfolder(string.format("%s/%s", MainFileName, tostring(game.PlaceId))) then 
     makefolder(string.format("%s/%s", MainFileName, tostring(game.PlaceId)))
@@ -155,7 +155,7 @@ local function getMousePosition()
     return GetMouseLocation(UserInputService)
 end
 
--- Функция видимости (нужна для VisibleCheck)
+-- Функция видимости
 local function IsPlayerVisible(Player)
     local PlayerCharacter = Player.Character
     local LocalPlayerCharacter = LocalPlayer.Character
@@ -417,7 +417,7 @@ resume(create(function()
     end)
 end))
 
--- Хук с Wallbang и обходом детекта
+-- Хук с исправленным Wallbang
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
     local Method = getnamecallmethod()
@@ -449,7 +449,12 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
             if Method == "FindPartOnRayWithIgnoreList" then
                 Arguments[2] = Ray.new(Origin, Direction)
                 if SilentAimSettings.Wallbang then
-                    Arguments[3] = getWallbangIgnoreList(Arguments[3])
+                    -- Безопасное получение списка игнорирования
+                    local oldIgnore = Arguments[3]
+                    if type(oldIgnore) ~= "table" then
+                        oldIgnore = {}
+                    end
+                    Arguments[3] = getWallbangIgnoreList(oldIgnore)
                 end
             else
                 Arguments[3] = Direction
