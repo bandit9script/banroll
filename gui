@@ -13,7 +13,7 @@ end
 
 local SilentAimSettings = {
     Enabled = false,
-    ClassName = "Universal Silent Aim - Averiias, Stefanuk12, xaxa",
+    ClassName = "BANDITKRUTOI",
     ToggleKey = "RightAlt",
     TeamCheck = false,
     VisibleCheck = false,
@@ -21,9 +21,20 @@ local SilentAimSettings = {
     SilentAimMethod = "FindPartOnRayWithIgnoreList",
     FOVRadius = 130,
     FOVVisible = false,
+    FOVColor1 = Color3.fromRGB(140, 20, 255),
+    FOVColor2 = Color3.fromRGB(255, 0, 150),
+    FOVFillColor1 = Color3.fromRGB(0, 255, 200), 
+    FOVFillColor2 = Color3.fromRGB(0, 100, 255), 
+    FOVFilled = false,
+    FOVPulsate = false,
+    FOVGlow = false,
     HitChance = 100,
     MaxDistance = 1000,
-    Wallbang = false   -- по умолчанию выключен
+    Wallbang = false,
+    PenetrationDistance = 1.5,
+    ThirdPerson = false,
+    ThirdPersonDistance = 10,
+    TPEnemies = false
 }
 
 getgenv().SilentAimSettings = SilentAimSettings
@@ -49,25 +60,67 @@ local create = coroutine.create
 
 local ValidTargetParts = {"Head", "HumanoidRootPart"}
 
--- FOV Circle
-local fov_circle = Drawing.new("Circle")
-fov_circle.Thickness = 1
-fov_circle.NumSides = 60
-fov_circle.Radius = 180
-fov_circle.Filled = false
-fov_circle.Visible = false
-fov_circle.ZIndex = 999
-fov_circle.Transparency = 1
-fov_circle.Color = Color3.fromRGB(140, 20, 255)
+-- Защищенный контейнер для продвинутого GUI FOV
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = game:GetService("HttpService"):GenerateGUID(false)
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 9999
+if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
+ScreenGui.Parent = game:GetService("CoreGui")
 
--- Wallbang: динамическое обновление списка объектов карты
+-- Создание структуры для единого вращающегося градиента
+local FovContainer = Instance.new("Frame")
+FovContainer.BackgroundTransparency = 1
+FovContainer.Size = UDim2.new(0, 260, 0, 260)
+FovContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+FovContainer.Visible = false
+FovContainer.ClipsDescendants = true   -- обрезаем всё внутри круга
+FovContainer.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(1, 0)
+UICorner.Parent = FovContainer
+
+-- Единый фрейм заливки с градиентом
+local FovFillFrame = Instance.new("Frame")
+FovFillFrame.BackgroundTransparency = 0.3
+FovFillFrame.Visible = true
+FovFillFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+FovFillFrame.BorderSizePixel = 0
+FovFillFrame.Parent = FovContainer
+
+-- ДОБАВЛЯЕМ UICorner ВНУТРЬ ЗАЛИВКИ, чтобы она тоже была круглой
+local FillCorner = Instance.new("UICorner")
+FillCorner.CornerRadius = UDim.new(1, 0)
+FillCorner.Parent = FovFillFrame
+
+local UIGradient = Instance.new("UIGradient")
+UIGradient.Rotation = 90                      -- начальный поворот
+UIGradient.Offset = Vector2.new(0, 0)        -- центр
+UIGradient.Parent = FovFillFrame
+
+-- Нативный контур (Поверх заливки)
+local fov_outline = Drawing.new("Circle")
+fov_outline.Thickness = 2.5
+fov_outline.NumSides = 64
+fov_outline.Filled = false
+fov_outline.Visible = false
+fov_outline.ZIndex = 1001
+
+-- Нативное свечение (За контуром)
+local fov_glow = Drawing.new("Circle")
+fov_glow.NumSides = 64
+fov_glow.Filled = false
+fov_glow.Visible = false
+fov_glow.ZIndex = 999
+
+-- Wallbang логгер объектов
 local MAP_IgnoreList = nil
 local lastMapUpdate = 0
 
 local function UpdateMapIgnoreList()
     local mapFolder = workspace:FindFirstChild("MAP") or workspace
     local objects = {}
-    -- Быстрый сбор всех частей карты через GetDescendants
     for _, obj in ipairs(mapFolder:GetDescendants()) do
         if obj:IsA("BasePart") and obj.CanCollide then
             table.insert(objects, obj)
@@ -78,19 +131,15 @@ local function UpdateMapIgnoreList()
 end
 
 local function getWallbangIgnoreList(originalIgnoreList)
-    -- Обновляем список, если прошло больше 5 секунд или он ещё не собирался
     if not MAP_IgnoreList or tick() - lastMapUpdate > 5 then
         UpdateMapIgnoreList()
     end
-
     local newList = {}
-    -- Копируем оригинальный список (если он таблица)
     if type(originalIgnoreList) == "table" then
         for _, obj in ipairs(originalIgnoreList) do
             table.insert(newList, obj)
         end
     end
-    -- Добавляем все объекты карты
     for _, obj in ipairs(MAP_IgnoreList) do
         table.insert(newList, obj)
     end
@@ -101,45 +150,6 @@ function CalculateChance(Percentage)
     Percentage = math.floor(Percentage)
     local chance = math.floor(Random.new().NextNumber(Random.new(), 0, 1) * 100) / 100
     return chance <= Percentage / 100
-end
-
--- file handling (по желанию)
-if not isfolder(MainFileName) then makefolder(MainFileName) end
-if not isfolder(string.format("%s/%s", MainFileName, tostring(game.PlaceId))) then 
-    makefolder(string.format("%s/%s", MainFileName, tostring(game.PlaceId)))
-end
-
-local function GetFiles()
-    local Files = listfiles(string.format("%s/%s", MainFileName, tostring(game.PlaceId)))
-    local out = {}
-    for i = 1, #Files do
-        local file = Files[i]
-        if file:sub(-4) == '.lua' then
-            local pos = file:find('.lua', 1, true)
-            local start = pos
-            local char = file:sub(pos, pos)
-            while char ~= '/' and char ~= '\\' and char ~= '' do
-                pos = pos - 1
-                char = file:sub(pos, pos)
-            end
-            if char == '/' or char == '\\' then
-                table.insert(out, file:sub(pos + 1, start - 1))
-            end
-        end
-    end
-    return out
-end
-
-local function UpdateFile(FileName)
-    writefile(string.format("%s/%s/%s.lua", MainFileName, tostring(game.PlaceId), FileName), HttpService:JSONEncode(SilentAimSettings))
-end
-
-local function LoadFile(FileName)
-    local File = string.format("%s/%s/%s.lua", MainFileName, tostring(game.PlaceId), FileName)
-    local ConfigData = HttpService:JSONDecode(readfile(File))
-    for Index, Value in next, ConfigData do
-        SilentAimSettings[Index] = Value
-    end
 end
 
 local function getPositionOnScreen(Vector)
@@ -155,7 +165,6 @@ local function getMousePosition()
     return GetMouseLocation(UserInputService)
 end
 
--- Функция видимости
 local function IsPlayerVisible(Player)
     local PlayerCharacter = Player.Character
     local LocalPlayerCharacter = LocalPlayer.Character
@@ -167,7 +176,6 @@ local function IsPlayerVisible(Player)
     return #GetPartsObscuringTarget(Camera, CastPoints, IgnoreList) == 0
 end
 
--- ПОИСК ЦЕЛИ: учёт VisibleCheck (отключается при Wallbang)
 local function getClosestPlayer()
     if not Options.TargetPart.Value then return nil end
     local Closest = nil
@@ -197,12 +205,10 @@ local function getClosestPlayer()
             if not AimPart then continue end
         end
 
-        -- Проверка видимости: работает только если Wallbang выключен и VisibleCheck включён
         if not wallbangActive and Toggles.VisibleCheck.Value then
             if not IsPlayerVisible(Player) then continue end
         end
 
-        -- Ограничение по дистанции
         if maxDist < 1000 then
             local myChar = LocalPlayer.Character
             local myPos = myChar and myChar:FindFirstChild("HumanoidRootPart") and myChar.HumanoidRootPart.Position or Camera.CFrame.Position
@@ -232,19 +238,17 @@ Library.OutlineColor = Color3.fromRGB(45, 30, 60)
 
 local Window = Library:CreateWindow({Title = 'BANDIT9HUB', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0.2})
 
-local GeneralTab = Window:AddTab("General")
+local RageTab = Window:AddTab("Rage")
 local VisualsTab = Window:AddTab("Visuals")
 
-local MainBOX = GeneralTab:AddLeftTabbox("Main") do
+local MainBOX = RageTab:AddLeftTabbox("Main") do
     local Main = MainBOX:AddTab("Main")
-    
     Main:AddToggle("aim_Enabled", {Text = "Enabled"}):AddKeyPicker("aim_Enabled_KeyPicker", {Default = "RightAlt", SyncToggleState = true, Mode = "Toggle", Text = "Enabled", NoUI = false});
     Options.aim_Enabled_KeyPicker:OnClick(function()
         SilentAimSettings.Enabled = not SilentAimSettings.Enabled
         Toggles.aim_Enabled.Value = SilentAimSettings.Enabled
         Toggles.aim_Enabled:SetValue(SilentAimSettings.Enabled)
     end)
-    
     Main:AddToggle("TeamCheck", {Text = "Team Check", Default = SilentAimSettings.TeamCheck}):OnChanged(function()
         SilentAimSettings.TeamCheck = Toggles.TeamCheck.Value
     end)
@@ -254,49 +258,60 @@ local MainBOX = GeneralTab:AddLeftTabbox("Main") do
     Main:AddDropdown("TargetPart", {AllowNull = true, Text = "Target Part", Default = SilentAimSettings.TargetPart, Values = {"Head", "HumanoidRootPart", "Random"}}):OnChanged(function()
         SilentAimSettings.TargetPart = Options.TargetPart.Value
     end)
-    
-    Main:AddSlider('HitChance', {
-        Text = 'Hit chance',
-        Default = 100,
-        Min = 0,
-        Max = 100,
-        Rounding = 1,
-        Compact = false,
-    })
-    Options.HitChance:OnChanged(function()
-        SilentAimSettings.HitChance = Options.HitChance.Value
-    end)
-
-    Main:AddToggle("Wallbang", {Text = "Wallbang", Default = SilentAimSettings.Wallbang}):OnChanged(function()
-        SilentAimSettings.Wallbang = Toggles.Wallbang.Value
-    end)
+    Main:AddSlider('HitChance', {Text = 'Hit chance', Default = 100, Min = 0, Max = 100, Rounding = 1, Compact = false})
+    Options.HitChance:OnChanged(function() SilentAimSettings.HitChance = Options.HitChance.Value end)
+    Main:AddToggle("Wallbang", {Text = "Wallbang", Default = SilentAimSettings.Wallbang}):OnChanged(function() SilentAimSettings.Wallbang = Toggles.Wallbang.Value end)
 end
 
-local FieldOfViewBOX = GeneralTab:AddLeftTabbox("Field Of View") do
+local FieldOfViewBOX = RageTab:AddLeftTabbox("Field Of View") do
     local Main = FieldOfViewBOX:AddTab("Visuals")
     
-    Main:AddToggle("Visible", {Text = "Show FOV Circle"}):AddColorPicker("Color", {Default = Color3.fromRGB(140, 20, 255)}):OnChanged(function()
-        fov_circle.Visible = Toggles.Visible.Value
+    Main:AddToggle("Visible", {Text = "Show FOV Circle"})
+        :AddColorPicker("Color1", {Default = Color3.fromRGB(140, 20, 255)})
+        :AddColorPicker("Color2", {Default = Color3.fromRGB(255, 0, 150)})
+        
+    Toggles.Visible:OnChanged(function()
         SilentAimSettings.FOVVisible = Toggles.Visible.Value
     end)
-    Main:AddSlider("Radius", {Text = "FOV Circle Radius", Min = 0, Max = 360, Default = 130, Rounding = 0}):OnChanged(function()
-        fov_circle.Radius = Options.Radius.Value
+    
+    Main:AddToggle("FOVFilled", {Text = "Fill Inside FOV", Default = false})
+        :AddColorPicker("FillColor1", {Default = Color3.fromRGB(0, 255, 200)})
+        :AddColorPicker("FillColor2", {Default = Color3.fromRGB(0, 100, 255)})
+        
+    Toggles.FOVFilled:OnChanged(function()
+        SilentAimSettings.FOVFilled = Toggles.FOVFilled.Value
+    end)
+    
+    Main:AddToggle("FOVGlow", {Text = "Enable Glow Effect", Default = false}):OnChanged(function() SilentAimSettings.FOVGlow = Toggles.FOVGlow.Value end)
+    Main:AddToggle("FOVPulsate", {Text = "Enable Pulsate", Default = false}):OnChanged(function() SilentAimSettings.FOVPulsate = Toggles.FOVPulsate.Value end)
+    
+    Main:AddSlider("Radius", {Text = "FOV Circle Radius", Min = 10, Max = 400, Default = 130, Rounding = 0}):OnChanged(function()
         SilentAimSettings.FOVRadius = Options.Radius.Value
     end)
-    Main:AddSlider("MaxDistance", {
-        Text = "Max Aim Distance",
-        Default = 1000,
-        Min = 10,
-        Max = 1000,
-        Rounding = 1,
-        Compact = false
-    })
-    Options.MaxDistance:OnChanged(function()
-        SilentAimSettings.MaxDistance = Options.MaxDistance.Value
-    end)
+    
+    Main:AddSlider("MaxDistance", {Text = "Max Aim Distance", Default = 1000, Min = 10, Max = 1000, Rounding = 1, Compact = false})
+    Options.MaxDistance:OnChanged(function() SilentAimSettings.MaxDistance = Options.MaxDistance.Value end)
+    Main:AddSlider("PenetrationDistance", {Text = "Penetration Distance", Default = 1.5, Min = 0, Max = 5, Rounding = 1, Compact = false})
+    Options.PenetrationDistance:OnChanged(function() SilentAimSettings.PenetrationDistance = Options.PenetrationDistance.Value end)
 end
 
--- ESP Settings
+local RightRageBOX = RageTab:AddRightTabbox("Exploits") do
+    local Exploits = RightRageBOX:AddTab("Bring Enemies")
+    Exploits:AddToggle("TPEnemies", {Text = "Bring Enemies to You", Default = false}):OnChanged(function() SilentAimSettings.TPEnemies = Toggles.TPEnemies.Value end)
+    Exploits:AddSlider("TPOffsetForward", {Text = "Distance Forward", Default = 7, Min = 2, Max = 25, Rounding = 1})
+    Exploits:AddSlider("TPOffsetHeight", {Text = "Distance Up", Default = 6, Min = 1, Max = 25, Rounding = 1})
+end
+
+local CameraBOX = VisualsTab:AddLeftTabbox("Camera") do
+    local Cam = CameraBOX:AddTab("Third Person")
+    Cam:AddToggle("ThirdPerson", {Text = "Third Person", Default = SilentAimSettings.ThirdPerson}):OnChanged(function()
+        SilentAimSettings.ThirdPerson = Toggles.ThirdPerson.Value
+        if not SilentAimSettings.ThirdPerson then LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson end
+    end)
+    Cam:AddSlider("ThirdPersonDistance", {Text = "Camera Distance", Default = 10, Min = 2, Max = 30, Rounding = 1}):OnChanged(function() SilentAimSettings.ThirdPersonDistance = Options.ThirdPersonDistance.Value end)
+end
+
+-- ESP Блок конструктора
 local ESPGeneral = VisualsTab:AddLeftTabbox("ESP Settings")
 local ESPSettings = ESPGeneral:AddTab("General")
 ESPSettings:AddToggle("esp_Enabled", {Text = "Enable ESP"})
@@ -315,11 +330,7 @@ ESPPalette:AddLabel("High HP (Top)"):AddColorPicker("esp_HighHP", {Default = Col
 
 local ESP_Cache = {}
 local function CreateESP(player)
-    local draw = {
-        Box = Drawing.new("Square"),
-        Fill = Drawing.new("Square"),
-        HP_Segments = {}
-    }
+    local draw = {Box = Drawing.new("Square"), Fill = Drawing.new("Square"), HP_Segments = {}}
     draw.Box.Filled = false; draw.Box.ZIndex = 2
     draw.Fill.Filled = true; draw.Fill.ZIndex = 1
     for i = 1, 10 do
@@ -331,44 +342,123 @@ end
 
 resume(create(function()
     RenderStepped:Connect(function()
-        -- FOV circle
+        -- ОБРАБОТКА FOV С ИДЕАЛЬНО КРУГЛОЙ ЗАЛИВКОЙ
         if Toggles.Visible.Value then 
-            fov_circle.Visible = true
-            fov_circle.Color = Options.Color.Value
-            fov_circle.Position = getMousePosition()
+            local mousePos = getMousePosition()
+            local baseRadius = Options.Radius.Value
+            
+            local c1 = Options.Color1.Value
+            local c2 = Options.Color2.Value
+            
+            local f1 = Options.FillColor1.Value
+            local f2 = Options.FillColor2.Value
+            
+            local time = tick()
+            local pulse = SilentAimSettings.FOVPulsate and (math.sin(time * 4.5) * 7) or 0
+            local currentRadius = baseRadius + pulse
+            
+            -- Плавное смешивание цветов основного контура во времени
+            local colorLerp = (math.sin(time * 2.5) + 1) / 2
+            local currentMainColor = c1:Lerp(c2, colorLerp)
+            
+            -- 1. Рендеринг внешнего контура
+            fov_outline.Radius = currentRadius
+            fov_outline.Position = mousePos
+            fov_outline.Color = currentMainColor
+            fov_outline.Transparency = 0.9
+            fov_outline.Visible = true
+            
+            -- 2. ИДЕАЛЬНО КРУГЛАЯ ЗАЛИВКА (с UICorner внутри)
+            if Toggles.FOVFilled.Value then
+                FovContainer.Visible = true
+                local diameter = currentRadius * 2
+                
+                FovContainer.Size = UDim2.new(0, diameter, 0, diameter)
+                FovContainer.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y - 58)
+                
+                -- Заливка 1 к 1 с центром
+                FovFillFrame.Size = UDim2.new(1, 0, 1, 0)
+                FovFillFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+                
+                -- Градиент с тремя точками для плавности
+                UIGradient.Color = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0, f1),
+                    ColorSequenceKeypoint.new(0.5, f1:Lerp(f2, 0.5)),
+                    ColorSequenceKeypoint.new(1, f2)
+                })
+                
+                UIGradient.Rotation = (time * 150) % 360 
+            else
+                FovContainer.Visible = false
+            end
+            
+            -- 3. Glow Эффект
+            if SilentAimSettings.FOVGlow then
+                local glowPulse = 4 + (math.sin(time * 6) * 2)
+                fov_glow.Radius = currentRadius
+                fov_glow.Position = mousePos
+                fov_glow.Thickness = glowPulse
+                fov_glow.Color = currentMainColor
+                fov_glow.Transparency = 0.35 + (math.sin(time * 6) * 0.1)
+                fov_glow.Visible = true
+            else
+                fov_glow.Visible = false
+            end
         else
-            fov_circle.Visible = false
+            fov_outline.Visible = false
+            fov_glow.Visible = false
+            FovContainer.Visible = false
         end
 
-        -- ESP отрисовка
+        -- ТРЕТЬЕ ЛИЦО
+        if SilentAimSettings.ThirdPerson then
+            LocalPlayer.CameraMode = Enum.CameraMode.Classic
+            LocalPlayer.CameraMaxZoomDistance = SilentAimSettings.ThirdPersonDistance
+            LocalPlayer.CameraMinZoomDistance = SilentAimSettings.ThirdPersonDistance
+            if (Camera.CoordinateFrame.p - Camera.Focus.p).Magnitude < (SilentAimSettings.ThirdPersonDistance - 1) then
+                LocalPlayer.CameraMaxZoomDistance = SilentAimSettings.ThirdPersonDistance
+            end
+        end
+
+        -- ТЕЛЕПОРТ ВРАГОВ (Rage Bring)
+        if SilentAimSettings.TPEnemies then
+            local myChar = LocalPlayer.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if myRoot then
+                local forwardDist = Options.TPOffsetForward and Options.TPOffsetForward.Value or 7
+                local upDist = Options.TPOffsetHeight and Options.TPOffsetHeight.Value or 6
+                local targetPoint = myRoot.Position + (myRoot.CFrame.LookVector * forwardDist) + (myRoot.CFrame.UpVector * upDist)
+
+                for _, player in next, GetPlayers(Players) do
+                    if player == LocalPlayer or (Toggles.TeamCheck.Value and player.Team == LocalPlayer.Team) then continue end
+                    local enemyChar = player.Character
+                    local enemyRoot = enemyChar and enemyChar:FindFirstChild("HumanoidRootPart")
+                    local enemyHum = enemyChar and enemyChar:FindFirstChild("Humanoid")
+                    if enemyRoot and enemyHum and enemyHum.Health > 0 then
+                        enemyRoot.Velocity = Vector3.new(0, 0, 0)
+                        enemyRoot.CFrame = CFrame.new(targetPoint)
+                    end
+                end
+            end
+        end
+
+        -- ESP
         if Toggles.esp_Enabled and Toggles.esp_Enabled.Value then
             for _, player in next, GetPlayers(Players) do
                 local char = player.Character
-                if not char or not char:FindFirstChild("HumanoidRootPart") then
+                if not char or not char:FindFirstChild("HumanoidRootPart") or player == LocalPlayer or (Toggles.TeamCheck.Value and player.Team == LocalPlayer.Team) then
                     if ESP_Cache[player] then
-                        ESP_Cache[player].Box.Visible = false
-                        ESP_Cache[player].Fill.Visible = false
+                        ESP_Cache[player].Box.Visible = false; ESP_Cache[player].Fill.Visible = false
                         for _, seg in next, ESP_Cache[player].HP_Segments do seg.Visible = false end
                     end
                     continue
                 end
-
-                if Toggles.TeamCheck.Value and player.Team == LocalPlayer.Team then
-                    if ESP_Cache[player] then
-                        ESP_Cache[player].Box.Visible = false
-                        ESP_Cache[player].Fill.Visible = false
-                        for _, seg in next, ESP_Cache[player].HP_Segments do seg.Visible = false end
-                    end
-                    continue
-                end
-
                 local hrp = char.HumanoidRootPart
                 local hum = char:FindFirstChild("Humanoid")
                 local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
                 if not onScreen then
                     if ESP_Cache[player] then
-                        ESP_Cache[player].Box.Visible = false
-                        ESP_Cache[player].Fill.Visible = false
+                        ESP_Cache[player].Box.Visible = false; ESP_Cache[player].Fill.Visible = false
                         for _, seg in next, ESP_Cache[player].HP_Segments do seg.Visible = false end
                     end
                     continue
@@ -399,70 +489,46 @@ resume(create(function()
                     seg.Position = Vector2.new(x - 8, (y + height) - (segHeight * i))
                     seg.Visible = (i <= activeSegments) and Toggles.esp_Health.Value
                     if seg.Visible then
-                        if i <= 5 then
-                            seg.Color = lowCol:Lerp(midCol, (i - 1) / 4)
-                        else
-                            seg.Color = midCol:Lerp(highCol, (i - 5) / 5)
-                        end
+                        if i <= 5 then seg.Color = lowCol:Lerp(midCol, (i - 1) / 4) else seg.Color = midCol:Lerp(highCol, (i - 5) / 5) end
                     end
                 end
             end
         else
             for _, d in next, ESP_Cache do
-                d.Box.Visible = false
-                d.Fill.Visible = false
+                d.Box.Visible = false; d.Fill.Visible = false
                 for _, seg in next, d.HP_Segments do seg.Visible = false end
             end
         end
     end)
 end))
 
--- Хук с исправленным Wallbang
+-- Сайлент Хук
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
     local Method = getnamecallmethod()
     local Arguments = {...}
     local self = Arguments[1]
-
-    if not Toggles.aim_Enabled.Value or checkcaller() then
-        return oldNamecall(...)
-    end
-    if self ~= workspace then
-        return oldNamecall(...)
-    end
+    if not Toggles.aim_Enabled.Value or checkcaller() or self ~= workspace then return oldNamecall(...) end
 
     if Method == "FindPartOnRayWithIgnoreList" or Method == "Raycast" then
         local HitPart = getClosestPlayer()
         if HitPart then
-            if not CalculateChance(SilentAimSettings.HitChance) then
-                return oldNamecall(...)
-            end
-
+            if not CalculateChance(SilentAimSettings.HitChance) then return oldNamecall(...) end
             local Origin, Direction
-            if Method == "FindPartOnRayWithIgnoreList" then
-                Origin = Arguments[2].Origin
-            else
-                Origin = Arguments[2]
-            end
+            if Method == "FindPartOnRayWithIgnoreList" then Origin = Arguments[2].Origin else Origin = Arguments[2] end
             Direction = getDirection(Origin, HitPart.Position)
-
             if Method == "FindPartOnRayWithIgnoreList" then
                 Arguments[2] = Ray.new(Origin, Direction)
                 if SilentAimSettings.Wallbang then
-                    -- Безопасное получение списка игнорирования
                     local oldIgnore = Arguments[3]
-                    if type(oldIgnore) ~= "table" then
-                        oldIgnore = {}
-                    end
+                    if type(oldIgnore) ~= "table" then oldIgnore = {} end
                     Arguments[3] = getWallbangIgnoreList(oldIgnore)
                 end
             else
                 Arguments[3] = Direction
             end
-
             return oldNamecall(unpack(Arguments))
         end
     end
-
     return oldNamecall(...)
 end))
