@@ -44,6 +44,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
@@ -60,6 +61,15 @@ local create = coroutine.create
 
 local ValidTargetParts = {"Head", "HumanoidRootPart"}
 
+-- Кэш цели
+local cachedTarget = nil
+
+-- Auto Fire переменные
+local AutoFireEnabled = false
+local AutoWallEnabled = false
+local lastShotTime = 0
+local ShootDelay = 100  -- мс
+
 -- Защищенный контейнер для продвинутого GUI FOV
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = game:GetService("HttpService"):GenerateGUID(false)
@@ -74,14 +84,13 @@ FovContainer.BackgroundTransparency = 1
 FovContainer.Size = UDim2.new(0, 260, 0, 260)
 FovContainer.AnchorPoint = Vector2.new(0.5, 0.5)
 FovContainer.Visible = false
-FovContainer.ClipsDescendants = true   -- обрезаем всё внутри круга
+FovContainer.ClipsDescendants = true
 FovContainer.Parent = ScreenGui
 
 local UICorner = Instance.new("UICorner")
 UICorner.CornerRadius = UDim.new(1, 0)
 UICorner.Parent = FovContainer
 
--- Единый фрейм заливки с градиентом
 local FovFillFrame = Instance.new("Frame")
 FovFillFrame.BackgroundTransparency = 0.3
 FovFillFrame.Visible = true
@@ -89,17 +98,15 @@ FovFillFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 FovFillFrame.BorderSizePixel = 0
 FovFillFrame.Parent = FovContainer
 
--- ДОБАВЛЯЕМ UICorner ВНУТРЬ ЗАЛИВКИ, чтобы она тоже была круглой
 local FillCorner = Instance.new("UICorner")
 FillCorner.CornerRadius = UDim.new(1, 0)
 FillCorner.Parent = FovFillFrame
 
 local UIGradient = Instance.new("UIGradient")
-UIGradient.Rotation = 90                      -- начальный поворот
-UIGradient.Offset = Vector2.new(0, 0)        -- центр
+UIGradient.Rotation = 90
+UIGradient.Offset = Vector2.new(0, 0)
 UIGradient.Parent = FovFillFrame
 
--- Нативный контур (Поверх заливки)
 local fov_outline = Drawing.new("Circle")
 fov_outline.Thickness = 2.5
 fov_outline.NumSides = 64
@@ -107,7 +114,6 @@ fov_outline.Filled = false
 fov_outline.Visible = false
 fov_outline.ZIndex = 1001
 
--- Нативное свечение (За контуром)
 local fov_glow = Drawing.new("Circle")
 fov_glow.NumSides = 64
 fov_glow.Filled = false
@@ -227,6 +233,21 @@ local function getClosestPlayer()
     return Closest
 end
 
+-- Функция проверки прострела (Auto Wall)
+local function CanShootThrough(targetPart)
+    local Origin = Camera.CFrame.Position
+    local Direction = (targetPart.Position - Origin).Unit * 1000
+    local Raycast = Ray.new(Origin, Direction)
+
+    local ignoreList = {LocalPlayer.Character, targetPart.Parent}
+    local Hit, _ = workspace:FindPartOnRayWithIgnoreList(Raycast, ignoreList, false, true)
+
+    if Hit and (Hit:IsDescendantOf(targetPart.Parent) or Hit.CanCollide) then
+        return true
+    end
+    return false
+end
+
 -- ui
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua"))()
 
@@ -295,11 +316,22 @@ local FieldOfViewBOX = RageTab:AddLeftTabbox("Field Of View") do
     Options.PenetrationDistance:OnChanged(function() SilentAimSettings.PenetrationDistance = Options.PenetrationDistance.Value end)
 end
 
-local RightRageBOX = RageTab:AddRightTabbox("Exploits") do
-    local Exploits = RightRageBOX:AddTab("Bring Enemies")
-    Exploits:AddToggle("TPEnemies", {Text = "Bring Enemies to You", Default = false}):OnChanged(function() SilentAimSettings.TPEnemies = Toggles.TPEnemies.Value end)
-    Exploits:AddSlider("TPOffsetForward", {Text = "Distance Forward", Default = 7, Min = 2, Max = 25, Rounding = 1})
-    Exploits:AddSlider("TPOffsetHeight", {Text = "Distance Up", Default = 6, Min = 1, Max = 25, Rounding = 1})
+local RightRageBOX = RageTab:AddRightTabbox("Auto Fire") do
+    local BringTab = RightRageBOX:AddTab("Bring Enemies")
+    BringTab:AddToggle("TPEnemies", {Text = "Bring Enemies to You", Default = false}):OnChanged(function() SilentAimSettings.TPEnemies = Toggles.TPEnemies.Value end)
+    BringTab:AddSlider("TPOffsetForward", {Text = "Distance Forward", Default = 7, Min = 2, Max = 25, Rounding = 1})
+    BringTab:AddSlider("TPOffsetHeight", {Text = "Distance Up", Default = 6, Min = 1, Max = 25, Rounding = 1})
+    
+    local AutoFireTab = RightRageBOX:AddTab("AutoFire")
+    AutoFireTab:AddToggle("AutoFire", {Text = "Auto Fire", Default = false}):OnChanged(function()
+        AutoFireEnabled = Toggles.AutoFire.Value
+    end)
+    AutoFireTab:AddToggle("AutoWall", {Text = "Auto Wall", Default = false}):OnChanged(function()
+        AutoWallEnabled = Toggles.AutoWall.Value
+    end)
+    AutoFireTab:AddSlider("ShootDelay", {Text = "Shoot Delay (ms)", Default = 100, Min = 0, Max = 500, Rounding = 0}):OnChanged(function()
+        ShootDelay = Options.ShootDelay.Value
+    end)
 end
 
 local CameraBOX = VisualsTab:AddLeftTabbox("Camera") do
@@ -342,6 +374,13 @@ end
 
 resume(create(function()
     RenderStepped:Connect(function()
+        -- Обновляем кэш цели
+        if Toggles.aim_Enabled.Value then
+            cachedTarget = getClosestPlayer()
+        else
+            cachedTarget = nil
+        end
+
         -- ОБРАБОТКА FOV С ИДЕАЛЬНО КРУГЛОЙ ЗАЛИВКОЙ
         if Toggles.Visible.Value then 
             local mousePos = getMousePosition()
@@ -357,42 +396,32 @@ resume(create(function()
             local pulse = SilentAimSettings.FOVPulsate and (math.sin(time * 4.5) * 7) or 0
             local currentRadius = baseRadius + pulse
             
-            -- Плавное смешивание цветов основного контура во времени
             local colorLerp = (math.sin(time * 2.5) + 1) / 2
             local currentMainColor = c1:Lerp(c2, colorLerp)
             
-            -- 1. Рендеринг внешнего контура
             fov_outline.Radius = currentRadius
             fov_outline.Position = mousePos
             fov_outline.Color = currentMainColor
             fov_outline.Transparency = 0.9
             fov_outline.Visible = true
             
-            -- 2. ИДЕАЛЬНО КРУГЛАЯ ЗАЛИВКА (с UICorner внутри)
             if Toggles.FOVFilled.Value then
                 FovContainer.Visible = true
                 local diameter = currentRadius * 2
-                
                 FovContainer.Size = UDim2.new(0, diameter, 0, diameter)
                 FovContainer.Position = UDim2.new(0, mousePos.X, 0, mousePos.Y - 58)
-                
-                -- Заливка 1 к 1 с центром
                 FovFillFrame.Size = UDim2.new(1, 0, 1, 0)
                 FovFillFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-                
-                -- Градиент с тремя точками для плавности
                 UIGradient.Color = ColorSequence.new({
                     ColorSequenceKeypoint.new(0, f1),
                     ColorSequenceKeypoint.new(0.5, f1:Lerp(f2, 0.5)),
                     ColorSequenceKeypoint.new(1, f2)
                 })
-                
                 UIGradient.Rotation = (time * 150) % 360 
             else
                 FovContainer.Visible = false
             end
             
-            -- 3. Glow Эффект
             if SilentAimSettings.FOVGlow then
                 local glowPulse = 4 + (math.sin(time * 6) * 2)
                 fov_glow.Radius = currentRadius
@@ -420,7 +449,7 @@ resume(create(function()
             end
         end
 
-        -- ТЕЛЕПОРТ ВРАГОВ (Rage Bring)
+        -- ТЕЛЕПОРТ ВРАГОВ
         if SilentAimSettings.TPEnemies then
             local myChar = LocalPlayer.Character
             local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -437,6 +466,27 @@ resume(create(function()
                     if enemyRoot and enemyHum and enemyHum.Health > 0 then
                         enemyRoot.Velocity = Vector3.new(0, 0, 0)
                         enemyRoot.CFrame = CFrame.new(targetPoint)
+                    end
+                end
+            end
+        end
+
+        -- АВТО ОГОНЬ С ПРОВЕРКОЙ ПРОСТРЕЛА
+        if AutoFireEnabled and cachedTarget then
+            local targetHum = cachedTarget.Parent and cachedTarget.Parent:FindFirstChild("Humanoid")
+            if targetHum and targetHum.Health > 0 then
+                local canShoot = true
+                if AutoWallEnabled then
+                    canShoot = CanShootThrough(cachedTarget)
+                end
+                if canShoot then
+                    local now = tick() * 1000
+                    if now - lastShotTime >= ShootDelay then
+                        -- Эмуляция клика левой кнопкой мыши
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                        task.wait(0.05)
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                        lastShotTime = now
                     end
                 end
             end
@@ -502,7 +552,7 @@ resume(create(function()
     end)
 end))
 
--- Сайлент Хук
+-- Сайлент Хук (оригинальный)
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
     local Method = getnamecallmethod()
